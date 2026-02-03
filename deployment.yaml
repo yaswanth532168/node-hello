@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-yaswanth
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hello-yaswanth
+  template:
+    metadata:
+      labels:
+        app: hello-yaswanth
+    spec:
+      containers:
+      - name: hello-container
+        image: 946774551819.dkr.ecr.eu-north-1.amazonaws.com/hello-yaswanth
+        ports:
+        - containerPort: 3000
+
