@@ -12,6 +12,7 @@ jobs:
       AWS_REGION: eu-north-1
       ECR_REPOSITORY: hello-yaswanth
       DEPLOYMENT_NAME: hello-yaswanth
+      CONTAINER_NAME: hello-container
 
     steps:
       - name: Checkout source
@@ -24,38 +25,51 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-north-1
 
-      # ✅ Auto-detect AWS account ID
+      # Get AWS Account ID automatically
       - name: Get AWS Account ID
-        id: aws_account
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           echo "ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
 
-      # ✅ Safe ECR login
+      # Login to ECR
       - name: Login to Amazon ECR
         run: |
           aws ecr get-login-password --region $AWS_REGION \
           | docker login --username AWS --password-stdin \
           $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
+      # Build image using commit SHA
       - name: Build Docker image
-        run: docker build -t hello-yaswanth .
+        run: docker build -t app:${{ github.sha }} .
 
+      # Tag image with version + latest
       - name: Tag Docker image
         run: |
-          docker tag hello-yaswanth:latest \
+          docker tag app:${{ github.sha }} \
+          $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.sha }}
+
+          docker tag app:${{ github.sha }} \
           $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest
 
+      # Push both tags
       - name: Push Docker image
         run: |
-          docker push \
-          $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest
+          docker push $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.sha }}
+          docker push $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest
 
+      # Connect to cluster
       - name: Update kubeconfig
         run: |
           aws eks update-kubeconfig \
           --region $AWS_REGION \
           --name ${{ secrets.EKS_CLUSTER_NAME }}
 
-      - name: Restart Kubernetes deployment
-        run: kubectl rollout restart deployment $DEPLOYMENT_NAME
+      # Deploy new image version
+      - name: Deploy new version
+        run: |
+          kubectl set image deployment/$DEPLOYMENT_NAME \
+          $CONTAINER_NAME=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.sha }}
+
+      # Monitor rollout
+      - name: Verify rollout
+        run: kubectl rollout status deployment/$DEPLOYMENT_NAME
