@@ -1,6 +1,5 @@
 name: Deploy to EKS
 
-
 on:
   push:
     branches:
@@ -16,7 +15,7 @@ jobs:
     - name: Checkout source code
       uses: actions/checkout@v3
 
-    # Configure AWS credentials
+    # AWS credentials
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v3
       with:
@@ -24,50 +23,49 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
         aws-region: eu-north-1
 
+    # Login to ECR
     - name: Login to Amazon ECR
       run: |
         aws ecr get-login-password --region eu-north-1 \
         | docker login --username AWS --password-stdin 946774551819.dkr.ecr.eu-north-1.amazonaws.com
 
+    # Build image
     - name: Build Docker image
       run: |
         docker build -t node-hello:${{ github.run_number }} .
 
+    # Tag image
     - name: Tag image
       run: |
         docker tag node-hello:${{ github.run_number }} \
         946774551819.dkr.ecr.eu-north-1.amazonaws.com/node-hello:${{ github.run_number }}
 
+    # Push image
     - name: Push image
       run: |
         docker push 946774551819.dkr.ecr.eu-north-1.amazonaws.com/node-hello:${{ github.run_number }}
 
+    # Configure kubeconfig
     - name: Configure kubeconfig
       run: |
         aws eks --region eu-north-1 update-kubeconfig --name yaswanth-cluster
 
+    # Deploy application
     - name: Deploy application
       run: |
         kubectl set image deployment/hello-yaswanth \
         hello-container=946774551819.dkr.ecr.eu-north-1.amazonaws.com/node-hello:${{ github.run_number }}
 
-    - name: Verify rollout
+    # Verify and rollback automatically
+    - name: Verify deployment & rollback if failed
       run: |
-        kubectl rollout status deployment/hello-yaswanth --timeout=180s
+        echo "Checking rollout status..."
 
-    # ✅ Configure credentials again for rollback
-    - name: Configure AWS credentials for rollback
-      if: failure()
-      uses: aws-actions/configure-aws-credentials@v3
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
-        aws-region: eu-north-1
-
-    - name: Rollback deployment if failed
-      if: failure()
-      run: |
-        echo "Deployment failed. Rolling back to previous stable version..."
-        aws eks --region eu-north-1 update-kubeconfig --name yaswanth-cluster
-        kubectl rollout undo deployment/hello-yaswanth
-        echo "Rollback completed successfully."
+        if kubectl rollout status deployment/hello-yaswanth --timeout=180s; then
+          echo "Deployment successful. Old pods will be removed automatically."
+        else
+          echo "Deployment failed. Rolling back..."
+          kubectl rollout undo deployment/hello-yaswanth
+          echo "Rollback completed. Old pods restored."
+          exit 1
+        fi
