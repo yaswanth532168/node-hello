@@ -24,11 +24,19 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-north-1
 
+      # ✅ Auto-detect AWS account ID
+      - name: Get AWS Account ID
+        id: aws_account
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
+
+      # ✅ Safe ECR login
       - name: Login to Amazon ECR
         run: |
-          aws ecr get-login-password --region eu-north-1 \
+          aws ecr get-login-password --region $AWS_REGION \
           | docker login --username AWS --password-stdin \
-          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-north-1.amazonaws.com
+          $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
       - name: Build Docker image
         run: docker build -t hello-yaswanth .
@@ -36,18 +44,18 @@ jobs:
       - name: Tag Docker image
         run: |
           docker tag hello-yaswanth:latest \
-          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-north-1.amazonaws.com/hello-yaswanth:latest
+          $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest
 
       - name: Push Docker image
         run: |
           docker push \
-          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-north-1.amazonaws.com/hello-yaswanth:latest
+          $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest
 
       - name: Update kubeconfig
         run: |
           aws eks update-kubeconfig \
-          --region eu-north-1 \
+          --region $AWS_REGION \
           --name ${{ secrets.EKS_CLUSTER_NAME }}
 
       - name: Restart Kubernetes deployment
-        run: kubectl rollout restart deployment hello-yaswanth
+        run: kubectl rollout restart deployment $DEPLOYMENT_NAME
