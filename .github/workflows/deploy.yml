@@ -5,14 +5,15 @@ on:
     branches:
       - master
       - main
+  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-    # Checkout source code
-    - name: Checkout code
+    # Checkout repository
+    - name: Checkout source code
       uses: actions/checkout@v3
 
     # Configure AWS credentials
@@ -34,36 +35,38 @@ jobs:
       run: |
         docker build -t node-hello:${{ github.run_number }} .
 
-    # Tag image
+    # Tag Docker image
     - name: Tag image
       run: |
         docker tag node-hello:${{ github.run_number }} \
         946774551819.dkr.ecr.eu-north-1.amazonaws.com/node-hello:${{ github.run_number }}
 
-    # Push image
+    # Push image to ECR
     - name: Push image
       run: |
         docker push 946774551819.dkr.ecr.eu-north-1.amazonaws.com/node-hello:${{ github.run_number }}
 
-    # Configure kubectl
-    - name: Update kubeconfig
+    # Configure kubectl for EKS
+    - name: Configure kubeconfig
       run: |
         aws eks --region eu-north-1 update-kubeconfig --name yaswanth-cluster
 
-    # Deploy new image
-    - name: Deploy new version
+    # Deploy new image to Kubernetes
+    - name: Deploy application
       run: |
         kubectl set image deployment/hello-yaswanth \
         hello-container=946774551819.dkr.ecr.eu-north-1.amazonaws.com/node-hello:${{ github.run_number }}
 
-    # Wait for deployment
+    # Wait for rollout
     - name: Verify rollout
       run: |
-        kubectl rollout status deployment/hello-yaswanth --timeout=120s
+        kubectl rollout status deployment/hello-yaswanth --timeout=180s
 
     # Rollback if deployment fails
-    - name: Rollback on failure
+    - name: Rollback deployment if failed
       if: failure()
       run: |
         echo "Deployment failed. Rolling back to previous stable version..."
+        aws eks --region eu-north-1 update-kubeconfig --name yaswanth-cluster
         kubectl rollout undo deployment/hello-yaswanth
+        echo "Rollback completed successfully."
