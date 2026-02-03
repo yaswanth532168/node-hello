@@ -1,75 +1,68 @@
-name: CI-CD EKS Deployment
+name: Deploy to EKS
 
 on:
   push:
-    branches: ["master"]
+    branches:
+      - main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
-    env:
-      AWS_REGION: eu-north-1
-      ECR_REPOSITORY: hello-yaswanth
-      DEPLOYMENT_NAME: hello-yaswanth
-      CONTAINER_NAME: hello-container
-
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v3
+    # Checkout source code
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: eu-north-1
+    # Configure AWS credentials
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v3
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
+        aws-region: eu-north-1
 
-      # Get AWS Account ID automatically
-      - name: Get AWS Account ID
-        run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          echo "ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
+    # Login to ECR
+    - name: Login to Amazon ECR
+      run: |
+        aws ecr get-login-password --region eu-north-1 \
+        | docker login --username AWS --password-stdin 946774551819.dkr.ecr.eu-north-1.amazonaws.com
 
-      # Login to ECR
-      - name: Login to Amazon ECR
-        run: |
-          aws ecr get-login-password --region $AWS_REGION \
-          | docker login --username AWS --password-stdin \
-          $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+    # Build Docker image
+    - name: Build Docker image
+      run: |
+        docker build -t node-hello:${{ github.run_number }} .
 
-      # Build image using commit SHA
-      - name: Build Docker image
-        run: docker build -t app:${{ github.sha }} .
+    # Tag image
+    - name: Tag image
+      run: |
+        docker tag node-hello:${{ github.run_number }} \
+        946774551819.dkr.ecr.eu-north-1.amazonaws.com/node-hello:${{ github.run_number }}
 
-      # Tag image with version + latest
-      - name: Tag Docker image
-        run: |
-          docker tag app:${{ github.sha }} \
-          $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.sha }}
+    # Push image
+    - name: Push image
+      run: |
+        docker push 946774551819.dkr.ecr.eu-north-1.amazonaws.com/node-hello:${{ github.run_number }}
 
-          docker tag app:${{ github.sha }} \
-          $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest
+    # Configure kubectl
+    - name: Update kubeconfig
+      run: |
+        aws eks --region eu-north-1 update-kubeconfig --name yaswanth-cluster
 
-      # Push both tags
-      - name: Push Docker image
-        run: |
-          docker push $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.sha }}
-          docker push $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest
+    # Deploy new image
+    - name: Deploy new version
+      run: |
+        kubectl set image deployment/hello-yaswanth \
+        hello-container=946774551819.dkr.ecr.eu-north-1.amazonaws.com/node-hello:${{ github.run_number }}
 
-      # Connect to cluster
-      - name: Update kubeconfig
-        run: |
-          aws eks update-kubeconfig \
-          --region $AWS_REGION \
-          --name ${{ secrets.EKS_CLUSTER_NAME }}
+    # Wait for deployment
+    - name: Verify rollout
+      run: |
+        kubectl rollout status deployment/hello-yaswanth --timeout=120s
 
-      # Deploy new image version
-      - name: Deploy new version
-        run: |
-          kubectl set image deployment/$DEPLOYMENT_NAME \
-          $CONTAINER_NAME=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.sha }}
-
-      # Monitor rollout
-      - name: Verify rollout
-        run: kubectl rollout status deployment/$DEPLOYMENT_NAME
+    # Rollback if deployment fails
+    - name: Rollback on failure
+      if: failure()
+      run: |
+        echo "Deployment failed. Rolling back to previous stable version..."
+        kubectl rollout undo deployment/hello-yaswanth
