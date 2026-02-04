@@ -18,6 +18,7 @@ jobs:
       EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
 
     steps:
+    # Checkout source code
     - name: Checkout source code
       uses: actions/checkout@v3
 
@@ -29,12 +30,10 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
         aws-region: ${{ secrets.AWS_REGION }}
 
-    # Login to ECR (FIXED PIPE ISSUE)
+    # Login to Amazon ECR (fixed)
     - name: Login to Amazon ECR
       run: |
-        aws ecr get-login-password --region $AWS_REGION | \
-        docker login --username AWS --password-stdin \
-        $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+        aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
     # Build Docker image
     - name: Build Docker image
@@ -56,8 +55,7 @@ jobs:
     # Configure kubeconfig
     - name: Configure kubeconfig
       run: |
-        aws eks --region $AWS_REGION \
-        update-kubeconfig --name $EKS_CLUSTER_NAME
+        aws eks --region $AWS_REGION update-kubeconfig --name $EKS_CLUSTER_NAME
 
     # Deploy application
     - name: Deploy application
@@ -73,7 +71,7 @@ jobs:
         if kubectl rollout status deployment/hello-yaswanth --timeout=180s; then
           echo "Deployment successful. Old pods removed safely."
         else
-          echo "Deployment failed. Gathering details..."
+          echo "Deployment failed. Gathering error details..."
 
           echo "========== POD STATUS =========="
           kubectl get pods -o wide
