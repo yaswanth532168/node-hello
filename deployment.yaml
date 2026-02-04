@@ -4,17 +4,43 @@ metadata:
   name: hello-yaswanth
 spec:
   replicas: 1
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # old pod must stay running
+      maxSurge: 1          # create new pod first
+
   selector:
     matchLabels:
       app: hello-yaswanth
+
   template:
     metadata:
       labels:
         app: hello-yaswanth
+
     spec:
       containers:
       - name: hello-container
-        image: 946774551819.dkr.ecr.eu-north-1.amazonaws.com/hello-yaswanth
+        image: IMAGE_PLACEHOLDER
         ports:
         - containerPort: 3000
+
+        # Pod only ready when app works
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+        # Restart container if app crashes
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+
 
