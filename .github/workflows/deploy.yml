@@ -12,12 +12,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    
-    # Checkout code
     - name: Checkout source code
       uses: actions/checkout@v3
 
-    # AWS credentials
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v3
       with:
@@ -25,75 +22,64 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
         aws-region: ${{ secrets.AWS_REGION }}
 
-    # Login to ECR
     - name: Login to Amazon ECR
       run: |
         aws ecr get-login-password --region "${{ secrets.AWS_REGION }}" | docker login --username AWS --password-stdin "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com"
 
-    # Build Docker image
     - name: Build Docker image
       run: |
         docker build -t "${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}" .
 
-    # Tag image
     - name: Tag Docker image
       run: |
         docker tag "${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}" \
         "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}"
 
-    # Push image
     - name: Push Docker image
       run: |
         docker push "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}"
 
-    # Configure cluster access
     - name: Configure kubeconfig
       run: |
         aws eks --region "${{ secrets.AWS_REGION }}" update-kubeconfig --name "${{ secrets.EKS_CLUSTER_NAME }}"
 
-    # Deploy new version
     - name: Deploy application
       run: |
         kubectl set image deployment/hello-yaswanth \
         hello-container="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}"
 
-    # Wait for rollout
-    - name: Wait for rollout
+    - name: Wait rollout
       run: |
-        kubectl rollout status deployment/hello-yaswanth --timeout=180s || true
+        kubectl rollout status deployment/hello-yaswanth --timeout=120s || true
 
-    # Verify & rollback
-    - name: Verify deployment & rollback if failed
+    - name: Validate deployment
       run: |
-        echo "Checking deployment health..."
+        echo "Checking pod health..."
 
-        if kubectl get pods | grep -q CrashLoopBackOff; then
-          echo "Deployment failed. Crash detected."
+        CRASHING=$(kubectl get pods | grep CrashLoopBackOff || true)
 
-          echo "========== POD STATUS =========="
+        if [ -n "$CRASHING" ]; then
+          echo "❌ Deployment failed — CrashLoopBackOff detected"
+
+          echo "---- POD STATUS ----"
           kubectl get pods -o wide
 
-          FAILED_POD=$(kubectl get pods \
-            --field-selector=status.phase!=Running \
-            -o jsonpath="{.items[0].metadata.name}" || true)
+          POD=$(kubectl get pods | grep CrashLoopBackOff | awk '{print $1}')
 
-          echo "========== POD DESCRIPTION =========="
-          kubectl describe pod $FAILED_POD || true
+          echo "---- POD DETAILS ----"
+          kubectl describe pod $POD
 
-          echo "========== POD LOGS =========="
-          kubectl logs $FAILED_POD || true
+          echo "---- APPLICATION LOGS ----"
+          kubectl logs $POD || true
 
-          echo "========== RECENT EVENTS =========="
-          kubectl get events --sort-by=.lastTimestamp | tail -20
-
-          echo "Rolling back deployment..."
+          echo "Rolling back..."
           kubectl rollout undo deployment/hello-yaswanth
 
-          echo "Cleaning failed pods..."
-          kubectl delete pod --field-selector=status.phase!=Running || true
+          echo "Cleaning failed ReplicaSets..."
+          kubectl get rs -o name | grep hello-yaswanth | xargs kubectl delete || true
 
-          echo "Rollback completed. Old pod serving traffic."
+          echo "Rollback complete. Old version restored."
           exit 1
         else
-          echo "Deployment successful. Old pods removed safely."
+          echo "✅ Deployment successful."
         fi
