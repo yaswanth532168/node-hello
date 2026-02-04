@@ -29,51 +29,51 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
         aws-region: ${{ secrets.AWS_REGION }}
 
-    # Login to ECR
+    # Login to ECR (FIXED PIPE ISSUE)
     - name: Login to Amazon ECR
       run: |
-        aws ecr get-login-password --region $AWS_REGION \
-        | docker login --username AWS \
-        --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+        aws ecr get-login-password --region $AWS_REGION | \
+        docker login --username AWS --password-stdin \
+        $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
     # Build Docker image
     - name: Build Docker image
       run: |
         docker build -t $ECR_REPOSITORY:${{ github.run_number }} .
 
-    # Tag image
+    # Tag Docker image
     - name: Tag Docker image
       run: |
         docker tag $ECR_REPOSITORY:${{ github.run_number }} \
         $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.run_number }}
 
-    # Push image
+    # Push Docker image
     - name: Push Docker image
       run: |
         docker push \
         $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.run_number }}
 
-    # Configure kubectl
+    # Configure kubeconfig
     - name: Configure kubeconfig
       run: |
         aws eks --region $AWS_REGION \
         update-kubeconfig --name $EKS_CLUSTER_NAME
 
-    # Deploy new version
+    # Deploy application
     - name: Deploy application
       run: |
         kubectl set image deployment/hello-yaswanth \
         hello-container=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.run_number }}
 
-    # Verify deployment & rollback
+    # Verify deployment & rollback if failed
     - name: Verify deployment & rollback if failed
       run: |
         echo "Checking rollout status..."
 
         if kubectl rollout status deployment/hello-yaswanth --timeout=180s; then
-          echo "Deployment successful. Old pods safely removed."
+          echo "Deployment successful. Old pods removed safely."
         else
-          echo "Deployment failed. Collecting error details..."
+          echo "Deployment failed. Gathering details..."
 
           echo "========== POD STATUS =========="
           kubectl get pods -o wide
