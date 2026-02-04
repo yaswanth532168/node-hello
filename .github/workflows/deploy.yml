@@ -1,6 +1,5 @@
 name: Deploy to EKS
 
-
 on:
   push:
     branches:
@@ -18,7 +17,7 @@ jobs:
     - name: Checkout source code
       uses: actions/checkout@v3
 
-    # Configure AWS credentials
+    # AWS credentials
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v3
       with:
@@ -29,36 +28,46 @@ jobs:
     # Login to ECR
     - name: Login to Amazon ECR
       run: |
-        aws ecr get-login-password --region "${{ secrets.AWS_REGION }}" | docker login --username AWS --password-stdin "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com"
+        aws ecr get-login-password --region "${{ secrets.AWS_REGION }}" | \
+        docker login --username AWS --password-stdin \
+        "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com"
 
-    # Build Docker image
+    # Build image
     - name: Build Docker image
       run: |
         docker build -t "${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}" .
 
-    # Tag Docker image
+    # Tag image
     - name: Tag Docker image
       run: |
         docker tag "${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}" \
         "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}"
 
-    # Push Docker image
+    # Push image
     - name: Push Docker image
       run: |
-        docker push "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}"
+        docker push \
+        "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}"
 
-    # Configure kubeconfig
+    # Configure cluster access
     - name: Configure kubeconfig
       run: |
-        aws eks --region "${{ secrets.AWS_REGION }}" update-kubeconfig --name "${{ secrets.EKS_CLUSTER_NAME }}"
+        aws eks --region "${{ secrets.AWS_REGION }}" \
+        update-kubeconfig --name "${{ secrets.EKS_CLUSTER_NAME }}"
 
-    # Deploy application
+    # Deploy new version
     - name: Deploy application
       run: |
         kubectl set image deployment/hello-yaswanth \
         hello-container="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}"
 
-    # Verify deployment & rollback if failed
+    # Wait until pods ready
+    - name: Wait for pods to become ready
+      run: |
+        kubectl wait --for=condition=available \
+        deployment/hello-yaswanth --timeout=180s || true
+
+    # Verify rollout & rollback if failed
     - name: Verify deployment & rollback if failed
       run: |
         echo "Checking rollout status..."
@@ -66,7 +75,7 @@ jobs:
         if kubectl rollout status deployment/hello-yaswanth --timeout=180s; then
           echo "Deployment successful. Old pods safely removed."
         else
-          echo "Deployment failed. Collecting details..."
+          echo "Deployment failed. Crash details below."
 
           echo "========== POD STATUS =========="
           kubectl get pods -o wide
@@ -89,6 +98,6 @@ jobs:
           echo "Rolling back deployment..."
           kubectl rollout undo deployment/hello-yaswanth
 
-          echo "Rollback completed successfully."
+          echo "Rollback completed. Old pods serving traffic."
           exit 1
         fi
