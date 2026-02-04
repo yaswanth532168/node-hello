@@ -12,15 +12,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    # Checkout code
     - name: Checkout source code
       uses: actions/checkout@v3
 
-    # AWS credentials
+    # Configure AWS credentials
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v3
       with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: eu-north-1
 
     # Login to ECR
@@ -29,7 +30,7 @@ jobs:
         aws ecr get-login-password --region eu-north-1 \
         | docker login --username AWS --password-stdin 946774551819.dkr.ecr.eu-north-1.amazonaws.com
 
-    # Build image
+    # Build Docker image
     - name: Build Docker image
       run: |
         docker build -t node-hello:${{ github.run_number }} .
@@ -41,31 +42,52 @@ jobs:
         946774551819.dkr.ecr.eu-north-1.amazonaws.com/node-hello:${{ github.run_number }}
 
     # Push image
-    - name: Push image
+    - name: Push image to ECR
       run: |
         docker push 946774551819.dkr.ecr.eu-north-1.amazonaws.com/node-hello:${{ github.run_number }}
 
-    # Configure kubeconfig
+    # Configure kubectl
     - name: Configure kubeconfig
       run: |
         aws eks --region eu-north-1 update-kubeconfig --name yaswanth-cluster
 
-    # Deploy application
+    # Deploy new image
     - name: Deploy application
       run: |
         kubectl set image deployment/hello-yaswanth \
         hello-container=946774551819.dkr.ecr.eu-north-1.amazonaws.com/node-hello:${{ github.run_number }}
 
-    # Verify and rollback automatically
+    # Verify deployment & rollback if failed
     - name: Verify deployment & rollback if failed
       run: |
         echo "Checking rollout status..."
 
         if kubectl rollout status deployment/hello-yaswanth --timeout=180s; then
-          echo "Deployment successful. Old pods will be removed automatically."
+          echo "Deployment successful. Old pods safely removed."
         else
-          echo "Deployment failed. Rolling back..."
+          echo "Deployment failed. Collecting error details..."
+
+          echo "========== POD STATUS =========="
+          kubectl get pods -o wide
+
+          echo "========== FAILED POD =========="
+          FAILED_POD=$(kubectl get pods --field-selector=status.phase!=Running \
+            -o jsonpath="{.items[0].metadata.name}")
+
+          echo "Failed pod: $FAILED_POD"
+
+          echo "========== POD DESCRIPTION =========="
+          kubectl describe pod $FAILED_POD || true
+
+          echo "========== POD LOGS =========="
+          kubectl logs $FAILED_POD || true
+
+          echo "========== RECENT EVENTS =========="
+          kubectl get events --sort-by=.lastTimestamp | tail -20
+
+          echo "Rolling back to previous stable deployment..."
           kubectl rollout undo deployment/hello-yaswanth
-          echo "Rollback completed. Old pods restored."
+
+          echo "Rollback completed successfully. Old version restored."
           exit 1
         fi
