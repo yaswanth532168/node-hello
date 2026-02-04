@@ -12,9 +12,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
+    
+    # Checkout code
+    - name: Checkout source code
       uses: actions/checkout@v3
 
+    # AWS credentials
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v3
       with:
@@ -22,55 +25,75 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
         aws-region: ${{ secrets.AWS_REGION }}
 
+    # Login to ECR
     - name: Login to Amazon ECR
       run: |
-        aws ecr get-login-password --region "${{ secrets.AWS_REGION }}" \
-        | docker login --username AWS --password-stdin \
-        "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com"
+        aws ecr get-login-password --region "${{ secrets.AWS_REGION }}" | docker login --username AWS --password-stdin "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com"
 
+    # Build Docker image
     - name: Build Docker image
       run: |
         docker build -t "${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}" .
 
+    # Tag image
     - name: Tag Docker image
       run: |
         docker tag "${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}" \
         "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}"
 
+    # Push image
     - name: Push Docker image
       run: |
-        docker push \
-        "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}"
+        docker push "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}"
 
+    # Configure cluster access
     - name: Configure kubeconfig
       run: |
-        aws eks --region "${{ secrets.AWS_REGION }}" \
-        update-kubeconfig --name "${{ secrets.EKS_CLUSTER_NAME }}"
+        aws eks --region "${{ secrets.AWS_REGION }}" update-kubeconfig --name "${{ secrets.EKS_CLUSTER_NAME }}"
 
-    - name: Deploy new version
+    # Deploy new version
+    - name: Deploy application
       run: |
         kubectl set image deployment/hello-yaswanth \
         hello-container="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ github.run_number }}"
 
-    - name: Verify deployment & rollback
+    # Wait for rollout
+    - name: Wait for rollout
       run: |
-        echo "Waiting for rollout..."
+        kubectl rollout status deployment/hello-yaswanth --timeout=180s || true
 
-        if kubectl rollout status deployment/hello-yaswanth --timeout=180s; then
-          echo "Deployment successful. Old pods removed."
-        else
-          echo "Deployment failed. Showing crash info..."
+    # Verify & rollback
+    - name: Verify deployment & rollback if failed
+      run: |
+        echo "Checking deployment health..."
 
+        if kubectl get pods | grep -q CrashLoopBackOff; then
+          echo "Deployment failed. Crash detected."
+
+          echo "========== POD STATUS =========="
           kubectl get pods -o wide
 
           FAILED_POD=$(kubectl get pods \
             --field-selector=status.phase!=Running \
-            -o jsonpath="{.items[0].metadata.name}")
+            -o jsonpath="{.items[0].metadata.name}" || true)
 
+          echo "========== POD DESCRIPTION =========="
           kubectl describe pod $FAILED_POD || true
+
+          echo "========== POD LOGS =========="
           kubectl logs $FAILED_POD || true
 
-          echo "Rolling back..."
+          echo "========== RECENT EVENTS =========="
+          kubectl get events --sort-by=.lastTimestamp | tail -20
+
+          echo "Rolling back deployment..."
           kubectl rollout undo deployment/hello-yaswanth
+
+          echo "Cleaning failed pods..."
+          kubectl delete pod --field-selector=status.phase!=Running || true
+
+          echo "Rollback completed. Old pod serving traffic."
           exit 1
+        else
+          echo "Deployment successful. Old pods removed safely."
         fi
