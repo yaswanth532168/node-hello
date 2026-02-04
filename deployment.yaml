@@ -8,8 +8,8 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 0   # old pod must stay running
-      maxSurge: 1          # create new pod first
+      maxUnavailable: 1   # old pod must stay running
+      maxSurge: 0          # create new pod first
 
   selector:
     matchLabels:
