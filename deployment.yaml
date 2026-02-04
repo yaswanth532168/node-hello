@@ -27,6 +27,11 @@ spec:
         ports:
         - containerPort: 3000
 
+        # Mount persistent storage
+        volumeMounts:
+        - name: app-storage
+          mountPath: /app/data
+
         # Pod only ready when app works
         readinessProbe:
           httpGet:
@@ -43,4 +48,8 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 10
 
+      volumes:
+      - name: app-storage
+        persistentVolumeClaim:
+          claimName: app-storage
 
